@@ -51,44 +51,7 @@ HBrain is a knowledge graph system powered by Large Language Models (LLMs) that 
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Frontend (Next.js)                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐ │
-│  │ Dashboard│  │  Login   │  │Register  │  │  Knowledge UI    │ │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────────────┘ │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ HTTP/REST
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Backend (FastAPI)                           │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ Routes: auth, entities, graph, knowledge, operations,      ││
-│  │         search, users, roles, permissions                  ││
-│  └─────────────────────────────────────────────────────────────┘│
-│  ┌───────────────┐ ┌───────────────┐ ┌────────────────────────┐  │
-│  │ Agents        │ │ LLM Layer     │ │ Services               │  │
-│  │ ├─Feynman     │ │ ├─OpenAI      │ │ ├─Auth                 │  │
-│  │ ├─Retrieval   │ │ ├─Anthropic   │ │ ├─Document             │  │
-│  │ ├─Evaluation  │ │ └─Embedder    │ │ ├─Knowledge            │  │
-│  │ └─Merge       │ │               │ │ ├─Graph                │  │
-│  └───────────────┘ └───────────────┘ └────────────────────────┘  │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ Storage Layer                                               ││
-│  │ ├─KuzuStore (Graph DB)                                      ││
-│  │ ├─EntitySearch (SQLite FTS5)                                ││
-│  │ ├─MinIO Client (Object Storage)                            ││
-│  │ └─SQLite (Documents + Auth)                                 ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
-                           │
-          ┌────────────────┼────────────────┐
-          ▼                ▼                ▼
-    ┌──────────┐    ┌──────────────┐   ┌──────────┐
-    │   Kuzu   │    │    MinIO     │   │  SQLite  │
-    │ (Graph)  │    │ (Files)      │   │ (Docs)   │
-    └──────────┘    └──────────────┘   └──────────┘
-```
+<img width="1448" height="1086" alt="c81fb1b1-3650-4898-86eb-8cb0067bc66a" src="https://github.com/user-attachments/assets/81dc6fb1-8489-4b1a-9458-da85709b206a" />
 
 ### Core Components
 
