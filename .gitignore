@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+paper/
+.eggs/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Environment Variables
+.env
+front/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+data/
+*.db
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Neo4j
+neo4j_data/
+neo4j_logs/
+
+# Claude Code
+.claude/
+
+# Next.js
+front/.next/
+front/out/
+front/node_modules/
+front/tsconfig.tsbuildinfo
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Windows batch scripts
+*.bat
+
+# Python type checking
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
