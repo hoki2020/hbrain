@@ -11,7 +11,7 @@ class BaseLLM(ABC):
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.3,
-        max_tokens: int = 2000,
+        max_tokens: Optional[int] = None,
     ) -> str:
         ...
 

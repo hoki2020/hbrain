@@ -95,7 +95,7 @@ class FeynmanAgent:
                 sources=[EntitySource(
                     doc_id=doc_id,
                     doc_name=doc_name,
-                    excerpt=text[:500],
+                    excerpt=text,
                 )],
             )
             entities.append(entity)

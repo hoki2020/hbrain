@@ -275,6 +275,21 @@ const zhCN: Record<string, string> = {
   'knowledge.dropFiles': '释放文件以上传',
   'knowledge.dragHere': '拖拽文件到此处',
   'knowledge.orClickToSelect': '或点击选择文件，支持 PDF、Office、TXT、图片格式',
+  'knowledge.uploadFileTab': '上传文件',
+  'knowledge.pasteTextTab': '粘贴文本',
+  'knowledge.textTitle': '标题',
+  'knowledge.textTitlePlaceholder': '输入标题，如：用户问答记录',
+  'knowledge.textContent': '文本内容',
+  'knowledge.textContentPlaceholder': '粘贴或输入文本内容...',
+  'knowledge.convertToWiki': '自动转换为百科格式',
+  'knowledge.convertToWikiDesc': '使用AI将文本结构化为维基百科风格的文档',
+  'knowledge.submitText': '提交文本',
+  'knowledge.textSubmitted': '文本已提交',
+  'knowledge.enterTitle': '请输入标题',
+  'knowledge.enterContent': '请输入文本内容',
+
+  // Filter
+  'filter.text': '文本片段',
 
   // Graph extended
   'graph.feynmanSummary': '费曼总结',
@@ -828,6 +843,21 @@ const zhTW: Record<string, string> = {
   'knowledge.dropFiles': '釋放檔案以上傳',
   'knowledge.dragHere': '拖曳檔案至此',
   'knowledge.orClickToSelect': '或點擊選擇檔案，支援 PDF、Office、TXT、圖片格式',
+  'knowledge.uploadFileTab': '上傳檔案',
+  'knowledge.pasteTextTab': '貼上文字',
+  'knowledge.textTitle': '標題',
+  'knowledge.textTitlePlaceholder': '輸入標題，如：使用者問答記錄',
+  'knowledge.textContent': '文字內容',
+  'knowledge.textContentPlaceholder': '貼上或輸入文字內容...',
+  'knowledge.convertToWiki': '自動轉換為百科格式',
+  'knowledge.convertToWikiDesc': '使用AI將文字結構化為維基百科風格的文件',
+  'knowledge.submitText': '提交文字',
+  'knowledge.textSubmitted': '文字已提交',
+  'knowledge.enterTitle': '請輸入標題',
+  'knowledge.enterContent': '請輸入文字內容',
+
+  // Filter
+  'filter.text': '文字片段',
 
   // Graph extended
   'graph.feynmanSummary': '費曼總結',
@@ -1381,6 +1411,21 @@ const enUS: Record<string, string> = {
   'knowledge.dropFiles': 'Drop files to upload',
   'knowledge.dragHere': 'Drag files here',
   'knowledge.orClickToSelect': 'or click to select files. Supports PDF, Office, TXT, images',
+  'knowledge.uploadFileTab': 'Upload File',
+  'knowledge.pasteTextTab': 'Paste Text',
+  'knowledge.textTitle': 'Title',
+  'knowledge.textTitlePlaceholder': 'Enter title, e.g.: User Q&A History',
+  'knowledge.textContent': 'Text Content',
+  'knowledge.textContentPlaceholder': 'Paste or type text content...',
+  'knowledge.convertToWiki': 'Auto-convert to Wiki format',
+  'knowledge.convertToWikiDesc': 'Use AI to restructure text into Wikipedia-style document',
+  'knowledge.submitText': 'Submit Text',
+  'knowledge.textSubmitted': 'Text submitted',
+  'knowledge.enterTitle': 'Please enter a title',
+  'knowledge.enterContent': 'Please enter text content',
+
+  // Filter
+  'filter.text': 'Text Snippet',
 
   // Graph extended
   'graph.feynmanSummary': 'Feynman Summary',

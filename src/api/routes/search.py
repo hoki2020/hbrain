@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from config.settings import settings
 from src.api.deps import get_current_user, get_knowledge_service
 from src.api.schemas.requests import QueryRequest
 
@@ -55,6 +56,12 @@ async def search_knowledge(req: QueryRequest, user: dict = Depends(get_current_u
                 "level": ev.level.value,
                 "content": ev.content[:2000],
                 "entity_id": ev.entity_id,
+                "doc_url": f"{settings.API_BASE_URL}/api/knowledge/documents/{ev.doc_id}/download" if ev.doc_id and ev.doc_id > 0 else None,
+                "images": [
+                    f"{settings.API_BASE_URL}/api/knowledge/proxy-image/{key}"
+                    if not key.startswith("http") else key
+                    for key in (ev.images or [])
+                ],
             }
             for ev in result.evidences
         ],

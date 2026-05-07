@@ -131,6 +131,12 @@ export const knowledgeApi = {
 
   getDownloadUrl: (id: string) => request(`/api/knowledge/documents/${id}/download`),
 
+  submitText: (data: { title: string; content: string; convert_to_wiki: boolean }) =>
+    request('/api/knowledge/text', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   retryDocument: (id: string) =>
     request(`/api/knowledge/documents/${id}/reparse`, { method: 'POST' }),
 

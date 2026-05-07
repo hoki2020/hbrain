@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
+from config.settings import settings
+
 from prompts.retrieval import (
     ANSWER_SYSTEM,
     ANSWER_USER,
@@ -172,10 +174,11 @@ class RetrievalAgent:
         evidences_text = self._serialize_evidences(evidences)
 
         logger.info(f"[检索] Step6 序列化: graph={len(graph_context)} chars, evidences={len(evidences_text)} chars")
-        if len(evidences_text) > 8000:
-            logger.info(f"[检索] Step6 证据压缩: {len(evidences_text)} → 目标 8000 chars...")
+        threshold = settings.RETRIEVAL_DOC_LENGTH_THRESHOLD
+        if len(evidences_text) > threshold:
+            logger.info(f"[检索] Step6 证据压缩: {len(evidences_text)} → 目标 {threshold} chars...")
             evidences_text = await self._compress_evidences(
-                question, evidences_text, max_chars=8000
+                question, evidences_text, max_chars=threshold
             )
             logger.info(f"[检索] Step6 压缩完成: {len(evidences_text)} chars")
 
@@ -242,9 +245,9 @@ class RetrievalAgent:
         """Gather evidence per entity with priority: full_text > paragraph > summary.
 
         Rules:
-        - doc < 5000 chars  → full text evidence (全文证据)
-        - doc >= 5000 chars → search paragraphs using entity.label + keywords (段落证据, max 10)
-        - doc >= 5000 chars AND no matching paragraphs → entity summary (总结证据)
+        - doc < RETRIEVAL_DOC_LENGTH_THRESHOLD chars  → full text evidence (全文证据)
+        - doc >= RETRIEVAL_DOC_LENGTH_THRESHOLD chars → search paragraphs using entity.label + keywords (段落证据, max 10)
+        - doc >= RETRIEVAL_DOC_LENGTH_THRESHOLD chars AND no matching paragraphs → entity summary (总结证据)
 
         Priority is per-document: if doc X already has full_text/paragraph evidence
         from any entity, skip summary evidence from other entities referencing doc X.
@@ -296,7 +299,7 @@ class RetrievalAgent:
                     continue
                 doc_name = source.doc_name or f"文档#{doc_id}"
 
-                if len(content) < 5000:
+                if len(content) < settings.RETRIEVAL_DOC_LENGTH_THRESHOLD:
                     # ── 全文证据 ──
                     img_urls = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", content)
                     ev = Evidence(
@@ -325,7 +328,7 @@ class RetrievalAgent:
                                 doc_id=doc_id,
                                 doc_name=doc_name,
                                 level=EvidenceLevel.PARAGRAPH,
-                                content=para[:500],
+                                content=para,
                                 entity_id=entity.id,
                                 images=img_urls,
                             )
@@ -451,15 +454,17 @@ class RetrievalAgent:
             return evidences
 
     async def _compress_evidences(
-        self, question: str, evidences_text: str, max_chars: int = 8000
+        self, question: str, evidences_text: str, max_chars: int = None
     ) -> str:
+        if max_chars is None:
+            max_chars = settings.RETRIEVAL_DOC_LENGTH_THRESHOLD
         """Compress evidences using LLM when context exceeds model limits."""
         if len(evidences_text) <= max_chars:
             return evidences_text
         return await self._llm.complete(
             "你是一个信息压缩助手。将以下证据列表压缩到保留核心信息，去除重复和无关内容。"
             "保持证据来源标注和关键事实。输出纯文本，不要加标题或格式。",
-            f"用户问题：{question}\n\n原始证据：\n{evidences_text[:8000]}\n\n"
+            f"用户问题：{question}\n\n原始证据：\n{evidences_text}\n\n"
             f"请压缩到 {max_chars} 字以内，保留最重要的证据和来源信息。",
             temperature=0.2,
             max_tokens=4000,
@@ -484,7 +489,7 @@ class RetrievalAgent:
                 "issue": "问题",
                 "image": "图片",
             }.get(e.entity_type.value, e.entity_type.value)
-            summary = e.summary[:200]
+            summary = e.summary
             lines.append(f"[{type_label}] {e.label}: {summary}")
         return "\n".join(lines)
 

@@ -52,6 +52,7 @@ def get_llm() -> BaseLLM:
         api_key=settings.OPENAI_API_KEY,
         model=settings.OPENAI_MODEL,
         base_url=settings.OPENAI_BASE_URL,
+        max_tokens=settings.OPENAI_MAX_TOKENS,
     )
 
 

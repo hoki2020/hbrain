@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_MAX_TOKENS: int = 128000  # 默认128000 tokens
     ANTHROPIC_API_KEY: Optional[str] = None
     ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
 
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
     # --- Retrieval ---
     DEFAULT_SEARCH_TOP_K: int = 10
     SUBGRAPH_MAX_DEPTH: int = 2
+    RETRIEVAL_DOC_LENGTH_THRESHOLD: int = 16000  # 文档长度阈值，超过则进行证据压缩
 
     # --- Auth ---
     JWT_SECRET: str = "hbrain-secret-key-change-in-production"

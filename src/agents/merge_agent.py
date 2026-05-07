@@ -60,7 +60,7 @@ class MergeAgent:
                 "id": e.id,
                 "label": e.label,
                 "type": e.entity_type.value,
-                "summary": e.summary[:300] if e.summary else "",
+                "summary": e.summary if e.summary else "",
             })
 
         entities_json = json.dumps(entity_list, ensure_ascii=False, indent=2)

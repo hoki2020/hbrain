@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, UploadFile, File, BackgroundTasks, Depends
+from pydantic import BaseModel, Field
 
 from src.api.deps import get_current_user
 from src.services import document_service
@@ -17,6 +18,13 @@ SUPPORTED_FORMATS = {
 }
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
+MAX_TEXT_SIZE = 1 * 1024 * 1024  # 1 MB
+
+
+class TextSnippetRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    content: str = Field(..., min_length=1)
+    convert_to_wiki: bool = False
 
 
 async def _process_document(doc_id: int, original_name: str, file_content: bytes):
@@ -48,7 +56,7 @@ async def _process_document(doc_id: int, original_name: str, file_content: bytes
         try:
             from src.api.deps import get_llm
             llm = get_llm()
-            summary_prompt = f"用300字以内总结以下文档的核心内容：\n\n{markdown[:3000]}"
+            summary_prompt = f"用300字以内总结以下文档的核心内容：\n\n{markdown}"
             t2 = time.time()
             summary = await llm.complete(
                 "你是一个文档总结助手。用简洁的中文总结文档核心内容。",
@@ -93,6 +101,125 @@ async def _process_document(doc_id: int, original_name: str, file_content: bytes
         err_msg = f"文档处理失败: {type(e).__name__}: {e}"
         logger.error(f"[文档处理] ── #{doc_id} 失败 ({time.time()-t0:.1f}s): {err_msg}")
         document_service.update_doc_status(doc_id, "failed", error_message=err_msg)
+
+
+WIKI_CONVERSION_SYSTEM = (
+    "你是一个文档结构化专家。将用户提供的原始文本转换为结构化的百科全书风格的Markdown文档。"
+    "要求：\n"
+    "1. 为内容添加清晰的标题和章节结构\n"
+    "2. 将问答对、对话等内容提炼为独立的知识条目\n"
+    "3. 使用Markdown标题(##)、列表、粗体等格式增强可读性\n"
+    "4. 保留所有原始信息，不要遗漏任何关键内容\n"
+    "5. 如果内容是问答格式，将每个问答转换为独立的条目，用##标题标注问题，正文给出回答"
+)
+
+
+async def _process_text_snippet(doc_id: int, title: str, text_content: str, convert_to_wiki: bool):
+    """Background task: optionally convert to wiki, then extract knowledge from text."""
+    import time
+    t0 = time.time()
+    try:
+        logger.info(f"[文本处理] ── 开始处理 #{doc_id}: {title} ({len(text_content)} chars)")
+
+        content = text_content
+
+        # Step 1: Optionally convert to wiki format
+        if convert_to_wiki:
+            logger.info(f"[文本处理] #{doc_id} Step1 转换为百科格式...")
+            document_service.update_doc_status(doc_id, "extracting", 5)
+            try:
+                from src.api.deps import get_llm
+                llm = get_llm()
+                t1 = time.time()
+                content = await llm.complete(
+                    WIKI_CONVERSION_SYSTEM,
+                    f"请将以下文本转换为百科格式：\n\n{text_content}",
+                    max_tokens=4096,
+                )
+                logger.info(f"[文本处理] #{doc_id} Step1 百科转换完成 ({time.time()-t1:.1f}s): {len(content)} chars")
+                # Update the document content with wiki version
+                conn = document_service._get_conn()
+                try:
+                    conn.execute("UPDATE documents SET content=?, markdown_content=? WHERE id=?",
+                                 (content, content, doc_id))
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.warning(f"[文本处理] #{doc_id} Step1 百科转换失败，使用原文: {e}")
+                content = text_content
+
+        document_service.update_doc_status(doc_id, "extracting", 10)
+
+        # Step 2: Generate summary
+        logger.info(f"[文本处理] #{doc_id} Step2 生成摘要...")
+        try:
+            from src.api.deps import get_llm
+            llm = get_llm()
+            summary_prompt = f"用300字以内总结以下内容的核心要点：\n\n{content}"
+            t2 = time.time()
+            summary = await llm.complete(
+                "你是一个内容总结助手。用简洁的中文总结核心内容。",
+                summary_prompt,
+                max_tokens=500,
+            )
+            document_service.update_doc_summary(doc_id, summary)
+            logger.info(f"[文本处理] #{doc_id} Step2 摘要完成 ({time.time()-t2:.1f}s)")
+        except Exception as e:
+            logger.warning(f"[文本处理] #{doc_id} Step2 摘要生成失败: {e}")
+
+        # Step 3: Graph extraction
+        logger.info(f"[文本处理] #{doc_id} Step3 开始图谱抽取...")
+        document_service.update_doc_status(doc_id, "extracting", 30)
+        from src.api.deps import get_knowledge_service
+        svc = get_knowledge_service()
+
+        def on_extract_progress(pct: int, msg: str):
+            document_service.update_doc_status(doc_id, "extracting", 30 + int(pct * 0.65))
+
+        t3 = time.time()
+        result = await svc.ingest(
+            content, doc_id=doc_id, doc_name=title,
+            on_progress=on_extract_progress,
+        )
+        entity_count = len(result.entities)
+        relation_count = len(result.relations)
+        logger.info(
+            f"[文本处理] #{doc_id} Step3 图谱抽取完成 ({time.time()-t3:.1f}s): "
+            f"{entity_count}个实体, {relation_count}个关系"
+        )
+
+        document_service.update_doc_status(doc_id, "completed", 100, content=content)
+        logger.info(f"[文本处理] ── #{doc_id} 处理完成: {title} (总耗时 {time.time()-t0:.1f}s)")
+    except Exception as e:
+        err_msg = f"文本处理失败: {type(e).__name__}: {e}"
+        logger.error(f"[文本处理] ── #{doc_id} 失败 ({time.time()-t0:.1f}s): {err_msg}")
+        document_service.update_doc_status(doc_id, "failed", error_message=err_msg)
+
+
+@router.post("/text")
+async def submit_text_snippet(
+    req: TextSnippetRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    """Submit a text snippet for knowledge extraction (no file upload needed)."""
+    content_bytes = req.content.encode("utf-8")
+    if len(content_bytes) > MAX_TEXT_SIZE:
+        return {"error": f"文本大小超过限制（最大 {MAX_TEXT_SIZE // 1024 // 1024}MB）"}
+
+    doc_info = document_service.save_text_content(req.title, req.content)
+    doc_id = int(doc_info["id"])
+
+    background_tasks.add_task(
+        _process_text_snippet,
+        doc_id,
+        req.title,
+        req.content,
+        req.convert_to_wiki,
+    )
+
+    return doc_info
 
 
 @router.get("/documents")

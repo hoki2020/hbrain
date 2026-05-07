@@ -49,6 +49,7 @@ def init_doc_db():
         ("minio_key", "TEXT"),
         ("parsed_minio_key", "TEXT"),
         ("markdown_content", "TEXT"),
+        ("source_type", "TEXT DEFAULT 'file'"),
     ]:
         try:
             conn.execute(f"ALTER TABLE documents ADD COLUMN {col} {typ}")
@@ -84,6 +85,38 @@ def save_upload_file(file_content: bytes, original_name: str) -> tuple[dict, byt
             "progress": 0,
             "uploadedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }, file_content
+    finally:
+        conn.close()
+
+
+def save_text_content(title: str, content: str) -> dict:
+    """Save a text snippet directly (no file upload). Returns doc_info."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = title.replace(' ', '_')[:100]
+    filename = f"{timestamp}_{safe_title}"
+    size = len(content.encode("utf-8"))
+
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO documents (filename, original_name, format, size, status, progress, content, source_type)
+               VALUES (?, ?, 'text', ?, 'extracting', 0, ?, 'text')""",
+            (filename, title, size, content),
+        )
+        doc_id = cursor.lastrowid
+        conn.commit()
+
+        return {
+            "id": str(doc_id),
+            "filename": filename,
+            "originalName": title,
+            "format": "text",
+            "size": size,
+            "status": "extracting",
+            "progress": 0,
+            "source_type": "text",
+            "uploadedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
     finally:
         conn.close()
 
@@ -287,11 +320,12 @@ def list_documents() -> List[dict]:
                 "format": r["format"],
                 "size": r["size"],
                 "status": r["status"],
-                "progress": r["progress"] if r["status"] in ("uploading", "parsing") else None,
+                "progress": r["progress"] if r["status"] in ("uploading", "parsing", "extracting") else None,
                 "uploadedAt": r["uploaded_at"],
                 "parsedAt": r["parsed_at"],
                 "errorMessage": r["error_message"],
                 "summary": r["summary"],
+                "source_type": r["source_type"] or "file",
             }
             for r in rows
         ]
@@ -312,13 +346,14 @@ def get_document(doc_id: int) -> Optional[dict]:
             "format": r["format"],
             "size": r["size"],
             "status": r["status"],
-            "progress": r["progress"] if r["status"] in ("uploading", "parsing") else None,
+            "progress": r["progress"] if r["status"] in ("uploading", "parsing", "extracting") else None,
             "content": r["content"],
             "summary": r["summary"],
             "uploadedAt": r["uploaded_at"],
             "parsedAt": r["parsed_at"],
             "errorMessage": r["error_message"],
             "markdownContent": r["markdown_content"],
+            "source_type": r["source_type"] or "file",
         }
     finally:
         conn.close()
@@ -391,7 +426,7 @@ def search_paragraphs(doc_id: int, keywords: str, context_chars: int = 200) -> L
                 continue
             para_lower = para.lower()
             if any(kw in para_lower for kw in keyword_list):
-                paragraphs.append(para[:500])
+                paragraphs.append(para)
         return paragraphs[:10]
     finally:
         conn.close()

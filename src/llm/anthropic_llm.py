@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Optional
 
 from anthropic import AsyncAnthropic
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -20,8 +21,10 @@ class AnthropicLLM(BaseLLM):
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.3,
-        max_tokens: int = 2000,
+        max_tokens: Optional[int] = None,
     ) -> str:
+        if max_tokens is None:
+            max_tokens = 4096  # Anthropic默认值
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=max_tokens,

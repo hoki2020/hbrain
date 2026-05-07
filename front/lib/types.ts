@@ -76,7 +76,7 @@ export interface KnowledgeDocument {
   id: string
   filename: string
   originalName: string
-  format: 'pdf' | 'docx' | 'doc' | 'xlsx' | 'xls' | 'pptx' | 'ppt' | 'txt' | 'png' | 'jpg' | 'jpeg' | 'webp' | 'gif' | 'bmp'
+  format: 'pdf' | 'docx' | 'doc' | 'xlsx' | 'xls' | 'pptx' | 'ppt' | 'txt' | 'text' | 'png' | 'jpg' | 'jpeg' | 'webp' | 'gif' | 'bmp'
   size: number
   status: 'uploading' | 'parsing' | 'extracting' | 'completed' | 'failed'
   progress?: number
@@ -86,6 +86,7 @@ export interface KnowledgeDocument {
   uploadedAt: string
   parsedAt?: string
   errorMessage?: string
+  source_type?: 'file' | 'text'
 }
 
 // 实体来源

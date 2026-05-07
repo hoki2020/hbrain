@@ -18,6 +18,8 @@ import {
   Download,
   Image,
   RefreshCw,
+  FileEdit,
+  ClipboardPaste,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -58,6 +60,10 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import { knowledgeApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
 import { useI18n } from '@/lib/i18n'
@@ -90,6 +96,8 @@ function FormatIcon({ format }: { format: string }) {
       return <FileText className={`${iconClass} text-orange-500`} />
     case 'txt':
       return <File className={`${iconClass} text-gray-500`} />
+    case 'text':
+      return <FileEdit className={`${iconClass} text-teal-500`} />
     case 'png':
     case 'jpg':
     case 'jpeg':
@@ -165,6 +173,10 @@ export default function KnowledgePage() {
   const [logData, setLogData] = useState<{ status: string; progress?: number; errorMessage?: string } | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [textTitle, setTextTitle] = useState('')
+  const [textContent, setTextContent] = useState('')
+  const [convertToWiki, setConvertToWiki] = useState(false)
+  const [textSubmitting, setTextSubmitting] = useState(false)
   const { hasPermission } = useAuth()
   const canUpload = hasPermission('knowledge:upload')
   const canDelete = hasPermission('knowledge:delete')
@@ -251,6 +263,34 @@ export default function KnowledgePage() {
       }
     }
   }, [])
+
+  // 提交文本片段
+  const handleSubmitText = useCallback(async () => {
+    if (!textTitle.trim()) return
+    if (!textContent.trim()) return
+
+    setTextSubmitting(true)
+    try {
+      const result = await knowledgeApi.submitText({
+        title: textTitle.trim(),
+        content: textContent.trim(),
+        convert_to_wiki: convertToWiki,
+      })
+      const tempDoc: KnowledgeDocument = {
+        ...result,
+        progress: 0,
+      }
+      setDocuments(prev => [tempDoc, ...prev])
+      setTextTitle('')
+      setTextContent('')
+      setConvertToWiki(false)
+      setUploadDialogOpen(false)
+    } catch (e) {
+      console.error('Text submit failed:', e)
+    } finally {
+      setTextSubmitting(false)
+    }
+  }, [textTitle, textContent, convertToWiki])
 
   const { getRootProps, getInputProps, isDragActive, isFocused } = useDropzone({
     onDrop,
@@ -442,6 +482,7 @@ export default function KnowledgePage() {
                   <SelectItem value="xlsx">Excel</SelectItem>
                   <SelectItem value="pptx">PPT</SelectItem>
                   <SelectItem value="txt">TXT</SelectItem>
+                  <SelectItem value="text">{t('filter.text')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -715,7 +756,7 @@ export default function KnowledgePage() {
         </DialogContent>
       </Dialog>
 
-      {/* 上传文件弹窗 */}
+      {/* 上传/粘贴弹窗 */}
       <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -724,32 +765,99 @@ export default function KnowledgePage() {
               {t('knowledge.uploadFile')}
             </DialogTitle>
           </DialogHeader>
-          <div
-            {...getRootProps()}
-            className={`
-              relative border-2 border-dashed rounded-xl p-10 text-center cursor-pointer
-              transition-all duration-300 ease-out
-              ${isDragActive
-                ? 'border-primary bg-primary/5'
-                : 'border-muted-foreground/25 hover:border-primary/50 hover:bg-accent/50'
-              }
-            `}
-          >
-            <input {...getInputProps()} />
-            <div className={`
-              mx-auto w-14 h-14 rounded-full flex items-center justify-center mb-4
-              transition-colors duration-300
-              ${isDragActive ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}
-            `}>
-              <Upload className="w-7 h-7" />
-            </div>
-            <h3 className="text-base font-semibold text-foreground mb-1">
-              {isDragActive ? t('knowledge.dropFiles') : t('knowledge.dragHere')}
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              {t('knowledge.orClickToSelect')}
-            </p>
-          </div>
+          <Tabs defaultValue="file" className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="file" className="gap-1.5">
+                <Upload className="w-4 h-4" />
+                {t('knowledge.uploadFileTab')}
+              </TabsTrigger>
+              <TabsTrigger value="text" className="gap-1.5">
+                <ClipboardPaste className="w-4 h-4" />
+                {t('knowledge.pasteTextTab')}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="file" className="mt-4">
+              <div
+                {...getRootProps()}
+                className={`
+                  relative border-2 border-dashed rounded-xl p-10 text-center cursor-pointer
+                  transition-all duration-300 ease-out
+                  ${isDragActive
+                    ? 'border-primary bg-primary/5'
+                    : 'border-muted-foreground/25 hover:border-primary/50 hover:bg-accent/50'
+                  }
+                `}
+              >
+                <input {...getInputProps()} />
+                <div className={`
+                  mx-auto w-14 h-14 rounded-full flex items-center justify-center mb-4
+                  transition-colors duration-300
+                  ${isDragActive ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}
+                `}>
+                  <Upload className="w-7 h-7" />
+                </div>
+                <h3 className="text-base font-semibold text-foreground mb-1">
+                  {isDragActive ? t('knowledge.dropFiles') : t('knowledge.dragHere')}
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  {t('knowledge.orClickToSelect')}
+                </p>
+              </div>
+            </TabsContent>
+            <TabsContent value="text" className="mt-4 space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="text-title">{t('knowledge.textTitle')}</Label>
+                <Input
+                  id="text-title"
+                  placeholder={t('knowledge.textTitlePlaceholder')}
+                  value={textTitle}
+                  onChange={(e) => setTextTitle(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="text-content">{t('knowledge.textContent')}</Label>
+                <Textarea
+                  id="text-content"
+                  placeholder={t('knowledge.textContentPlaceholder')}
+                  value={textContent}
+                  onChange={(e) => setTextContent(e.target.value)}
+                  className="min-h-[200px] resize-y"
+                />
+              </div>
+              <div className="flex items-start gap-3 rounded-lg border p-3">
+                <Checkbox
+                  id="convert-wiki"
+                  checked={convertToWiki}
+                  onCheckedChange={(checked) => setConvertToWiki(checked === true)}
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label htmlFor="convert-wiki" className="text-sm font-medium cursor-pointer">
+                    {t('knowledge.convertToWiki')}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {t('knowledge.convertToWikiDesc')}
+                  </p>
+                </div>
+              </div>
+              <Button
+                className="w-full"
+                onClick={handleSubmitText}
+                disabled={textSubmitting || !textTitle.trim() || !textContent.trim()}
+              >
+                {textSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    {t('common.loading')}
+                  </>
+                ) : (
+                  <>
+                    <FileEdit className="w-4 h-4 mr-2" />
+                    {t('knowledge.submitText')}
+                  </>
+                )}
+              </Button>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
     </motion.div>

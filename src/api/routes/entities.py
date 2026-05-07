@@ -15,7 +15,7 @@ def _entity_to_response(entity) -> EntityResponse:
     return EntityResponse(
         id=entity.id,
         label=entity.label,
-        summary=entity.summary[:300],
+        summary=entity.summary,
         entity_type=entity.entity_type.value,
         confidence=entity.confidence,
     )
