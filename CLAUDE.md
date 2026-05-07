@@ -224,6 +224,16 @@ Documents are processed asynchronously via FastAPI `BackgroundTasks`:
 4. Extract entities/relations with FeynmanAgent
 5. Store in Kuzu graph
 
+### Text Snippet Ingestion
+
+Text content (e.g., Q&A history, notes) can be ingested directly without file upload via `POST /api/knowledge/text`:
+1. (Optional) Convert to wiki-style markdown with LLM
+2. Generate summary with LLM
+3. Extract entities/relations with FeynmanAgent
+4. Store in Kuzu graph
+
+Documents have a `source_type` field: `'file'` for uploaded files, `'text'` for text snippets.
+
 ### Frontend State Management
 
 The frontend uses React Context for auth state and local component state for data. No global state manager (Redux, Zustand) is used. Pages manage their own data fetching and polling.

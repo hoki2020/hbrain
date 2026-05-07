@@ -40,6 +40,7 @@ HBrain is a knowledge graph system powered by Large Language Models (LLMs) that 
 
 ### Document Management
 - **Multi-format Support**: PDF, Word, PPT, Excel, images, HTML, TXT
+- **Text Snippet Ingestion**: Directly submit text content (Q&A history, notes) to knowledge base via API
 - **Asynchronous Processing**: Background upload, parsing, extraction with progress tracking
 - **MinerU Integration**: Document parsing using VLM API
 - **Image Proxy**: Automatic extraction and proxying of document images
@@ -274,6 +275,7 @@ After starting the backend service, visit the following URLs for API documentati
 | Auth | `/api/auth/register` | POST | User registration |
 | Knowledge | `/api/knowledge/documents` | GET | List documents |
 | Knowledge | `/api/knowledge/upload` | POST | Upload document |
+| Knowledge | `/api/knowledge/text` | POST | Submit text snippet to knowledge base |
 | Knowledge | `/api/knowledge/documents/{id}` | GET | Get document details |
 | Knowledge | `/api/knowledge/documents/{id}` | DELETE | Delete document |
 | Graph | `/api/graph/data` | GET | Get graph data |
