@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import List
 
 from src.llm.base import BaseLLM
 from src.models.entity import Entity, EntitySource
 from src.storage.interfaces import GraphStore
-from prompts.merge_detection import MERGE_SCAN_SYSTEM, MERGE_SCAN_USER
 
 logger = logging.getLogger(__name__)
 
@@ -41,76 +40,94 @@ class MergeResult:
     relations_deleted: int
 
 
+def _is_similar(a: str, b: str, threshold: float) -> bool:
+    """Check if two labels are similar enough to be duplicates."""
+    na, nb = a.strip().lower(), b.strip().lower()
+    if not na or not nb:
+        return False
+    # Exact match
+    if na == nb:
+        return True
+    # One contains the other (shorter >= 2 chars)
+    if len(na) >= 2 and len(nb) >= 2:
+        if na in nb or nb in na:
+            return True
+    # SequenceMatcher ratio
+    ratio = SequenceMatcher(None, na, nb).ratio()
+    return ratio >= threshold
+
+
+def _build_merge_group(cluster: list[Entity]) -> MergeGroup:
+    """Build a MergeGroup from a cluster of similar entities."""
+    # Pick the longest label as merged_label (usually most descriptive)
+    merged_label = max(cluster, key=lambda e: len(e.label)).label
+    # Combine unique summaries
+    summaries = []
+    seen = set()
+    for e in cluster:
+        s = (e.summary or "").strip()
+        if s and s not in seen:
+            seen.add(s)
+            summaries.append(s)
+    merged_summary = summaries[0] if summaries else cluster[0].summary
+    # Confidence based on how similar the labels are
+    labels = [e.label for e in cluster]
+    avg_ratio = sum(
+        SequenceMatcher(None, labels[i], labels[j]).ratio()
+        for i in range(len(labels))
+        for j in range(i + 1, len(labels))
+    ) / max(1, len(labels) * (len(labels) - 1) / 2)
+    confidence = round(min(0.5 + avg_ratio * 0.5, 1.0), 2)
+
+    return MergeGroup(
+        entities=cluster,
+        merged_label=merged_label,
+        merged_summary=merged_summary,
+        reason=f"实体名称相似（{', '.join(labels)}）",
+        confidence=confidence,
+    )
+
+
 class MergeAgent:
     def __init__(self, llm: BaseLLM, graph_store: GraphStore, entity_search=None):
         self._llm = llm
         self._graph = graph_store
         self._entity_search = entity_search
 
-    async def scan_candidates(self) -> List[MergeGroup]:
-        """Scan all entities grouped by type, LLM identifies duplicate groups."""
-        entities = await self._graph.get_all_entities(limit=500)
+    async def scan_candidates(self, similarity_threshold: float = 0.6) -> List[MergeGroup]:
+        """Scan all entities for duplicates using string similarity (no LLM)."""
+        entities = await self._graph.get_all_entities(limit=5000)
         if len(entities) < 2:
             return []
 
-        # Build compact entity list for LLM
-        entity_list = []
+        # Group entities by type
+        by_type: dict[str, list[Entity]] = {}
         for e in entities:
-            entity_list.append({
-                "id": e.id,
-                "label": e.label,
-                "type": e.entity_type.value,
-                "summary": e.summary if e.summary else "",
-            })
+            by_type.setdefault(e.entity_type.value, []).append(e)
 
-        entities_json = json.dumps(entity_list, ensure_ascii=False, indent=2)
-        user_prompt = MERGE_SCAN_USER.format(entities_json=entities_json)
+        groups: List[MergeGroup] = []
 
-        try:
-            result = await self._llm.complete_json(
-                system_prompt=MERGE_SCAN_SYSTEM,
-                user_prompt=user_prompt,
-                temperature=0.1,
-            )
-        except Exception as exc:
-            logger.error("Merge scan LLM call failed: %s", exc)
-            return []
-
-        raw_candidates = result.get("candidates", [])
-        if not raw_candidates:
-            return []
-
-        # Build entity lookup
-        entity_map = {e.id: e for e in entities}
-
-        groups = []
-        for c in raw_candidates:
-            entity_ids = c.get("entity_ids", [])
-            if len(entity_ids) < 2:
+        for etype, type_entities in by_type.items():
+            if len(type_entities) < 2:
                 continue
 
-            # Validate all entities exist and are the same type
-            group_entities = []
-            for eid in entity_ids:
-                if eid in entity_map:
-                    group_entities.append(entity_map[eid])
+            # Find similar pairs within this type using string similarity
+            used: set[str] = set()
+            for i, a in enumerate(type_entities):
+                if a.id in used:
+                    continue
+                cluster = [a]
+                for j in range(i + 1, len(type_entities)):
+                    b = type_entities[j]
+                    if b.id in used:
+                        continue
+                    if _is_similar(a.label, b.label, similarity_threshold):
+                        cluster.append(b)
 
-            if len(group_entities) < 2:
-                continue
-
-            # Verify same entity type
-            types = {e.entity_type.value for e in group_entities}
-            if len(types) > 1:
-                logger.warning("Skipping merge group with mixed types: %s", types)
-                continue
-
-            groups.append(MergeGroup(
-                entities=group_entities,
-                merged_label=c.get("merged_label", group_entities[0].label),
-                merged_summary=c.get("merged_summary", group_entities[0].summary),
-                reason=c.get("reason", ""),
-                confidence=float(c.get("confidence", 0.5)),
-            ))
+                if len(cluster) >= 2:
+                    for e in cluster:
+                        used.add(e.id)
+                    groups.append(_build_merge_group(cluster))
 
         groups.sort(key=lambda g: g.confidence, reverse=True)
         return groups

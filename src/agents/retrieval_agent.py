@@ -4,7 +4,6 @@ import logging
 from typing import List, Optional
 
 from config.settings import settings
-
 from prompts.retrieval import (
     ANSWER_SYSTEM,
     ANSWER_USER,
@@ -55,7 +54,9 @@ class RetrievalAgent:
         else:
             keywords = [str(raw_keywords)]
 
-        logger.info(f"[检索] Step1 分析完成: 类型='{problem_archetype}', 关键词={keywords}")
+        logger.info(
+            f"[检索] Step1 分析完成: 类型='{problem_archetype}', 关键词={keywords}"
+        )
 
         # Step 2: Graph match — search all terms in parallel
         import asyncio
@@ -73,7 +74,9 @@ class RetrievalAgent:
             if isinstance(result, Exception):
                 logger.warning(f"[检索] Step2 搜索 '{term}' 失败: {result}")
                 continue
-            logger.info(f"[检索] Step2 搜索 '{term}' → 命中 {len(result)} 个: {[e.label for e in result]}")
+            logger.info(
+                f"[检索] Step2 搜索 '{term}' → 命中 {len(result)} 个: {[e.label for e in result]}"
+            )
             for e in result:
                 if e.id not in seen_ids:
                     seen_ids.add(e.id)
@@ -94,7 +97,12 @@ class RetrievalAgent:
 
         # Step 3: Weighted BFS graph expansion
         from collections import defaultdict
-        from src.models.relation import EDGE_WEIGHTS, DEFAULT_EDGE_WEIGHT, NON_EXPANDABLE_RELATIONS
+
+        from src.models.relation import (
+            DEFAULT_EDGE_WEIGHT,
+            EDGE_WEIGHTS,
+            NON_EXPANDABLE_RELATIONS,
+        )
 
         HOP_DECAY = 0.7
         MAX_DEPTH = 3
@@ -114,7 +122,9 @@ class RetrievalAgent:
         entity_depths: dict[str, int] = {}
         queue: list[tuple[str, float, int]] = []  # (entity_id, score, depth)
         seen_edges: set[tuple[str, str, str]] = set()  # (src, tgt, rel_type) for dedup
-        hit_edges: list[tuple[str, str, str, float]] = []  # (src, tgt, rel_type, weight)
+        hit_edges: list[
+            tuple[str, str, str, float]
+        ] = []  # (src, tgt, rel_type, weight)
 
         for e in matched_entities:
             entity_scores[e.id] = 1.0
@@ -130,20 +140,34 @@ class RetrievalAgent:
             for neighbor_id, rel_type, edge_weight in adj.get(current_id, []):
                 new_score = current_score * edge_weight * HOP_DECAY
                 # Deduplicate edge (bidirectional adjacency creates both directions)
-                edge_key = (min(current_id, neighbor_id), max(current_id, neighbor_id), rel_type.value)
+                edge_key = (
+                    min(current_id, neighbor_id),
+                    max(current_id, neighbor_id),
+                    rel_type.value,
+                )
                 if edge_key not in seen_edges:
                     seen_edges.add(edge_key)
-                    hit_edges.append((current_id, neighbor_id, rel_type.value, edge_weight))
-                if neighbor_id not in entity_scores or new_score > entity_scores[neighbor_id]:
+                    hit_edges.append(
+                        (current_id, neighbor_id, rel_type.value, edge_weight)
+                    )
+                if (
+                    neighbor_id not in entity_scores
+                    or new_score > entity_scores[neighbor_id]
+                ):
                     entity_scores[neighbor_id] = new_score
                     entity_depths[neighbor_id] = depth + 1
                 # Weak relations: include in results but don't continue expanding
-                if neighbor_id not in visited and rel_type not in NON_EXPANDABLE_RELATIONS:
+                if (
+                    neighbor_id not in visited
+                    and rel_type not in NON_EXPANDABLE_RELATIONS
+                ):
                     visited.add(neighbor_id)
                     queue.append((neighbor_id, new_score, depth + 1))
 
         # Sort by score, take top 20 (excluding matched entities themselves for logging)
-        sorted_ids = sorted(entity_scores, key=lambda k: entity_scores[k], reverse=True)[:MAX_ENTITIES]
+        sorted_ids = sorted(
+            entity_scores, key=lambda k: entity_scores[k], reverse=True
+        )[:MAX_ENTITIES]
         subgraph_entities = await self._graph.get_entities_by_ids(sorted_ids)
 
         expansion_count = len(subgraph_entities) - len(matched_entities)
@@ -153,7 +177,9 @@ class RetrievalAgent:
         )
         # Log top scored entities
         for eid in sorted_ids[:5]:
-            logger.info(f"[检索]   → {eid[:8]}... score={entity_scores[eid]:.4f} depth={entity_depths.get(eid, '?')}")
+            logger.info(
+                f"[检索]   → {eid[:8]}... score={entity_scores[eid]:.4f} depth={entity_depths.get(eid, '?')}"
+            )
 
         # Step 4: Evidence gathering (full_text > paragraph > summary)
         evidences = await self._gather_evidences(subgraph_entities, keywords)
@@ -167,16 +193,22 @@ class RetrievalAgent:
         evidence_count_before = len(evidences)
         if evidences:
             evidences = await self._filter_evidences(question, evidences, keywords)
-        logger.info(f"[检索] Step5 证据评估: {evidence_count_before} → {len(evidences)} 条")
+        logger.info(
+            f"[检索] Step5 证据评估: {evidence_count_before} → {len(evidences)} 条"
+        )
 
         # Step 6: Compress evidences if too large
         graph_context = self._serialize_context(subgraph_entities)
         evidences_text = self._serialize_evidences(evidences)
 
-        logger.info(f"[检索] Step6 序列化: graph={len(graph_context)} chars, evidences={len(evidences_text)} chars")
+        logger.info(
+            f"[检索] Step6 序列化: graph={len(graph_context)} chars, evidences={len(evidences_text)} chars"
+        )
         threshold = settings.RETRIEVAL_DOC_LENGTH_THRESHOLD
         if len(evidences_text) > threshold:
-            logger.info(f"[检索] Step6 证据压缩: {len(evidences_text)} → 目标 {threshold} chars...")
+            logger.info(
+                f"[检索] Step6 证据压缩: {len(evidences_text)} → 目标 {threshold} chars..."
+            )
             evidences_text = await self._compress_evidences(
                 question, evidences_text, max_chars=threshold
             )
@@ -257,8 +289,12 @@ class RetrievalAgent:
         from src.services.document_service import get_document, search_paragraphs
 
         evidences: List[Evidence] = []
-        seen_evidence_keys: set[tuple[int, str]] = set()  # (doc_id, content_prefix) for dedup
-        docs_with_evidence: set[int] = set()  # doc_ids that already have full_text/paragraph evidence
+        seen_evidence_keys: set[tuple[int, str]] = (
+            set()
+        )  # (doc_id, content_prefix) for dedup
+        docs_with_evidence: set[int] = (
+            set()
+        )  # doc_ids that already have full_text/paragraph evidence
         doc_cache: dict[int, Optional[dict]] = {}  # cache loaded documents
         keyword_str = ",".join(keywords[:5])
 
@@ -313,7 +349,9 @@ class RetrievalAgent:
                     if _add_evidence(ev):
                         entity_has_doc_evidence = True
                         docs_with_evidence.add(doc_id)
-                        logger.info(f"[证据] 实体'{entity.label}' → 文档'{doc_name}' 全文证据 ({len(content)} chars)")
+                        logger.info(
+                            f"[证据] 实体'{entity.label}' → 文档'{doc_name}' 全文证据 ({len(content)} chars)"
+                        )
                 else:
                     # ── 段落证据 ──
                     search_kw = ",".join([entity.label, keyword_str])
@@ -337,14 +375,20 @@ class RetrievalAgent:
                         if para_count:
                             entity_has_doc_evidence = True
                             docs_with_evidence.add(doc_id)
-                            logger.info(f"[证据] 实体'{entity.label}' → 文档'{doc_name}' 段落证据 ×{para_count}")
+                            logger.info(
+                                f"[证据] 实体'{entity.label}' → 文档'{doc_name}' 段落证据 ×{para_count}"
+                            )
                     else:
-                        logger.debug(f"[证据] 实体'{entity.label}' → 文档'{doc_name}' 无段落匹配")
+                        logger.debug(
+                            f"[证据] 实体'{entity.label}' → 文档'{doc_name}' 无段落匹配"
+                        )
 
             # ── 总结证据（兜底） ──
             # 只有当实体没有任何文档，或者实体关联的所有文档都没有更高优先级证据时，才使用总结
             if not entity_has_doc_evidence and entity.summary:
-                entity_doc_ids = {s.doc_id for s in entity.sources if s.doc_id is not None}
+                entity_doc_ids = {
+                    s.doc_id for s in entity.sources if s.doc_id is not None
+                }
                 if not entity_doc_ids or entity_doc_ids.isdisjoint(docs_with_evidence):
                     ev = Evidence(
                         doc_id=0,
@@ -354,9 +398,13 @@ class RetrievalAgent:
                         entity_id=entity.id,
                     )
                     if _add_evidence(ev):
-                        logger.info(f"[证据] 实体'{entity.label}' → 无文档证据，使用总结证据")
+                        logger.info(
+                            f"[证据] 实体'{entity.label}' → 无文档证据，使用总结证据"
+                        )
                 else:
-                    logger.debug(f"[证据] 实体'{entity.label}' → 关联文档已有更高优先级证据，跳过总结")
+                    logger.debug(
+                        f"[证据] 实体'{entity.label}' → 关联文档已有更高优先级证据，跳过总结"
+                    )
 
         # ── 图片证据 ──
         for img_entity in image_entities:
@@ -377,7 +425,9 @@ class RetrievalAgent:
                         images=[image_url] if image_url else [],
                     )
                     if _add_evidence(ev):
-                        logger.info(f"[证据] 图片实体'{img_entity.label}' 关键词匹配，添加图片证据")
+                        logger.info(
+                            f"[证据] 图片实体'{img_entity.label}' 关键词匹配，添加图片证据"
+                        )
             except (json.JSONDecodeError, ValueError):
                 pass
 
@@ -410,7 +460,9 @@ class RetrievalAgent:
         lines = []
         for i, ev in enumerate(evidences):
             level_tag = level_labels.get(ev.level, "证据")
-            lines.append(f"[{i}] [{level_tag}] 来源: {ev.doc_name}\n    内容: {ev.content[:300]}")
+            lines.append(
+                f"[{i}] [{level_tag}] 来源: {ev.doc_name}\n    内容: {ev.content[:300]}"
+            )
         evidences_text = "\n\n".join(lines)
 
         try:
@@ -444,9 +496,7 @@ class RetrievalAgent:
                 return evidences
 
             filtered = [evidences[i] for i in sorted(valid_indices)]
-            logger.info(
-                f"证据评估: {len(evidences)} → {len(filtered)} 条相关证据"
-            )
+            logger.info(f"证据评估: {len(evidences)} → {len(filtered)} 条相关证据")
             return filtered
 
         except Exception as e:
@@ -467,7 +517,7 @@ class RetrievalAgent:
             f"用户问题：{question}\n\n原始证据：\n{evidences_text}\n\n"
             f"请压缩到 {max_chars} 字以内，保留最重要的证据和来源信息。",
             temperature=0.2,
-            max_tokens=4000,
+            max_tokens=settings.RETRIEVAL_DOC_LENGTH_THRESHOLD,
         )
 
     def _serialize_context(self, entities: List[Entity]) -> str:

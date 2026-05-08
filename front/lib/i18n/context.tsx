@@ -326,6 +326,9 @@ const zhCN: Record<string, string> = {
   'graph.mergeFailed': '合并失败',
   'graph.mergeSelfLoop': '组内关系（将被删除）',
   'graph.mergeNoScan': '点击扫描按钮查找重复实体',
+  'graph.mergeSkipped': '已跳过 {count} 组',
+  'graph.mergeClearSkipped': '显示已跳过',
+  'graph.mergeSelected': '已选 {selected}/{total}',
 
   // Users
   'users.title': '用户管理',
@@ -894,6 +897,9 @@ const zhTW: Record<string, string> = {
   'graph.mergeFailed': '合併失敗',
   'graph.mergeSelfLoop': '組內關係（將被刪除）',
   'graph.mergeNoScan': '點擊掃描按鈕查找重複實體',
+  'graph.mergeSkipped': '已跳過 {count} 組',
+  'graph.mergeClearSkipped': '顯示已跳過',
+  'graph.mergeSelected': '已選 {selected}/{total}',
 
   // Users
   'users.title': '使用者管理',
@@ -1462,6 +1468,9 @@ const enUS: Record<string, string> = {
   'graph.mergeFailed': 'Merge failed',
   'graph.mergeSelfLoop': 'Intra-group relation (will be deleted)',
   'graph.mergeNoScan': 'Click scan to find duplicate entities',
+  'graph.mergeSkipped': '{count} groups skipped',
+  'graph.mergeClearSkipped': 'Show skipped',
+  'graph.mergeSelected': '{selected}/{total} selected',
 
   // Users
   'users.title': 'User Management',

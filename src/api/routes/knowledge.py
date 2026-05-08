@@ -33,6 +33,7 @@ async def _process_document(doc_id: int, original_name: str, file_content: bytes
     t0 = time.time()
     try:
         size_kb = len(file_content) / 1024
+        ext = original_name.rsplit(".", 1)[-1].lower() if "." in original_name else ""
         logger.info(f"[文档处理] ── 开始处理 #{doc_id}: {original_name} ({size_kb:.1f} KB)")
 
         # Upload to MinIO
@@ -41,12 +42,17 @@ async def _process_document(doc_id: int, original_name: str, file_content: bytes
         document_service.upload_to_minio(doc_id, file_content)
         logger.info(f"[文档处理] #{doc_id} Step1 上传完成 ({time.time()-t0:.1f}s)")
 
-        # Parse with MinerU VLM API
-        logger.info(f"[文档处理] #{doc_id} Step2 开始 MinerU 解析...")
-        document_service.update_doc_status(doc_id, "parsing", 0)
-        t1 = time.time()
-        markdown = document_service.parse_with_mineru(doc_id)
-        logger.info(f"[文档处理] #{doc_id} Step2 MinerU 解析完成: markdown={len(markdown)} chars ({time.time()-t1:.1f}s)")
+        # Parse: txt files use content directly, others use MinerU
+        if ext == "txt":
+            logger.info(f"[文档处理] #{doc_id} Step2 txt 文件，跳过 MinerU 解析")
+            document_service.update_doc_status(doc_id, "parsing", 0)
+            markdown = file_content.decode("utf-8", errors="replace")
+        else:
+            logger.info(f"[文档处理] #{doc_id} Step2 开始 MinerU 解析...")
+            document_service.update_doc_status(doc_id, "parsing", 0)
+            t1 = time.time()
+            markdown = document_service.parse_with_mineru(doc_id)
+            logger.info(f"[文档处理] #{doc_id} Step2 MinerU 解析完成: markdown={len(markdown)} chars ({time.time()-t1:.1f}s)")
 
         document_service.update_doc_status(doc_id, "parsing", 60, content=markdown)
 

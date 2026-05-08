@@ -86,7 +86,7 @@ def _entity_dict(e) -> dict:
 
 @router.post("/merge/scan")
 async def merge_scan(user: dict = Depends(get_current_user)):
-    """Scan all entities for semantic duplicates using LLM."""
+    """Scan all entities for duplicates using string similarity."""
     agent = get_merge_agent()
     groups = await agent.scan_candidates()
     return {

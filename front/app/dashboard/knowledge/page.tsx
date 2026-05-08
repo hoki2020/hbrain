@@ -39,6 +39,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -315,9 +316,11 @@ export default function KnowledgePage() {
   // 筛选文档
   const filteredDocuments = useMemo(() => {
     return documents.filter((doc) => {
+      const originalName = doc.originalName || ''
+      const filename = doc.filename || ''
       const matchesSearch =
-        doc.originalName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        doc.filename.toLowerCase().includes(searchQuery.toLowerCase())
+        originalName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        filename.toLowerCase().includes(searchQuery.toLowerCase())
       const matchesStatus = statusFilter === 'all' || doc.status === statusFilter
       const matchesFormat = formatFilter === 'all' || doc.format === formatFilter
       return matchesSearch && matchesStatus && matchesFormat
@@ -335,7 +338,19 @@ export default function KnowledgePage() {
     try {
       const data = await knowledgeApi.getMarkdown(doc.id)
       if (data.error) throw new Error(data.error)
-      setMarkdownContent(data.markdown || '')
+      const md = data.markdown || ''
+      setMarkdownContent(md)
+
+      // 预加载 markdown 中的图片，避免渲染时逐张请求
+      const imgRegex = /!\[[^\]]*\]\(([^)]+)\)/g
+      let match
+      while ((match = imgRegex.exec(md)) !== null) {
+        const url = match[1]
+        if (url.includes('proxy-image')) {
+          const img = new window.Image()
+          img.src = url.startsWith('http') ? url : `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${url}`
+        }
+      }
     } catch (e: any) {
       setPreviewError(e.message || t('error.loadFileFailed'))
     } finally {
@@ -639,6 +654,9 @@ export default function KnowledgePage() {
                 </Button>
               </div>
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              {selectedDoc?.originalName}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="flex-1 overflow-hidden">
@@ -721,6 +739,9 @@ export default function KnowledgePage() {
               <FileText className="w-5 h-5" />
               {t('knowledge.processingLog')}
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              {logDoc?.originalName}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="text-sm text-muted-foreground truncate">
@@ -764,6 +785,9 @@ export default function KnowledgePage() {
               <Upload className="w-5 h-5" />
               {t('knowledge.uploadFile')}
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              {t('knowledge.orClickToSelect')}
+            </DialogDescription>
           </DialogHeader>
           <Tabs defaultValue="file" className="w-full">
             <TabsList className="grid w-full grid-cols-2">

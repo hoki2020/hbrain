@@ -453,6 +453,36 @@ export default function GraphPage() {
   const [mergeExecuting, setMergeExecuting] = useState(false)
   const [mergedLabel, setMergedLabel] = useState('')
   const [mergedSummary, setMergedSummary] = useState('')
+  const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([])
+
+  // 跳过的合并组（持久化到 localStorage）
+  const [skippedGroups, setSkippedGroups] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const raw = localStorage.getItem('hbrain_merge_skipped')
+      return raw ? new Set(JSON.parse(raw)) : new Set()
+    } catch { return new Set() }
+  })
+
+  const saveSkipped = (ids: string[]) => {
+    setSkippedGroups(prev => {
+      const next = new Set(prev)
+      ids.forEach(id => next.add(id))
+      try { localStorage.setItem('hbrain_merge_skipped', JSON.stringify([...next])) } catch {}
+      return next
+    })
+  }
+
+  const clearSkipped = () => {
+    setSkippedGroups(new Set())
+    try { localStorage.removeItem('hbrain_merge_skipped') } catch {}
+  }
+
+  // 判断一个候选组是否已被跳过
+  const isGroupSkipped = (group: MergeGroup) => {
+    const ids = group.entities.map(e => e.id).sort()
+    return ids.every(id => skippedGroups.has(id))
+  }
 
   const handleMergeScan = async () => {
     setMergeScanning(true)
@@ -461,7 +491,10 @@ export default function GraphPage() {
     setMergePreview(null)
     try {
       const result = await graphApi.mergeScan()
-      setMergeCandidates(result.candidates || [])
+      const all = result.candidates || []
+      // 过滤掉已跳过的组
+      const filtered = all.filter((g: MergeGroup) => !isGroupSkipped(g))
+      setMergeCandidates(filtered)
     } catch (e: any) {
       console.error('Merge scan failed:', e)
       toast.error(t('graph.mergeFailed'), { description: e?.message })
@@ -486,10 +519,11 @@ export default function GraphPage() {
 
   const handleMergeExecute = async () => {
     if (!currentCandidate) return
+    const idsToMerge = selectedEntityIds.length >= 2 ? selectedEntityIds : currentCandidate.entities.map(e => e.id)
+    if (idsToMerge.length < 2) return
     setMergeExecuting(true)
     try {
-      const entityIds = currentCandidate.entities.map(e => e.id)
-      const result = await graphApi.mergeExecute(entityIds, mergedLabel, mergedSummary)
+      const result = await graphApi.mergeExecute(idsToMerge, mergedLabel, mergedSummary)
       toast.success(t('graph.mergeSuccess', { relations: result.relations_migrated }))
       // Remove merged candidate and move to next
       const newCandidates = [...mergeCandidates]
@@ -510,6 +544,9 @@ export default function GraphPage() {
   }
 
   const handleMergeSkip = () => {
+    if (!currentCandidate) return
+    // 保存到跳过列表
+    saveSkipped(currentCandidate.entities.map(e => e.id))
     const newCandidates = [...mergeCandidates]
     newCandidates.splice(mergeCandidateIndex, 1)
     setMergeCandidates(newCandidates)
@@ -519,13 +556,22 @@ export default function GraphPage() {
     }
   }
 
+  // 显示已跳过的组
+  const handleShowSkipped = async () => {
+    if (skippedGroups.size === 0) return
+    clearSkipped()
+    // 重新扫描
+    await handleMergeScan()
+  }
+
   const currentCandidate = mergeCandidates[mergeCandidateIndex] || null
 
-  // 当切换候选时，初始化合并标签和总结
+  // 当切换候选时，初始化合并标签、总结和选中实体
   useEffect(() => {
     if (currentCandidate) {
       setMergedLabel(currentCandidate.merged_label)
       setMergedSummary(currentCandidate.merged_summary)
+      setSelectedEntityIds(currentCandidate.entities.map(e => e.id))
       setMergePreview(null)
     }
   }, [mergeCandidateIndex, currentCandidate])
@@ -877,22 +923,67 @@ export default function GraphPage() {
                     <p className="text-sm">{t('graph.mergeScanning')}</p>
                   </div>
                 ) : mergeCandidates.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-                    <Merge className="w-10 h-10 mb-3 opacity-30" />
+                  <div className="flex flex-col items-center justify-center h-64 text-muted-foreground gap-3">
+                    <Merge className="w-10 h-10 opacity-30" />
                     <p className="text-sm">{t('graph.mergeNoCandidates')}</p>
+                    {skippedGroups.size > 0 && (
+                      <Button variant="outline" size="sm" className="gap-1.5" onClick={handleShowSkipped}>
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        {t('graph.mergeClearSkipped')} ({skippedGroups.size})
+                      </Button>
+                    )}
                   </div>
                 ) : currentCandidate ? (
                   <div className="p-4 space-y-4">
                     {/* 组内实体列表 */}
                     <div className="space-y-2">
+                      {currentCandidate.entities.length > 3 && (
+                        <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                          <span>{t('graph.mergeSelected', { selected: selectedEntityIds.length, total: currentCandidate.entities.length })}</span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => setSelectedEntityIds(
+                              selectedEntityIds.length === currentCandidate.entities.length
+                                ? []
+                                : currentCandidate.entities.map(e => e.id)
+                            )}
+                          >
+                            {selectedEntityIds.length === currentCandidate.entities.length ? '全不选' : '全选'}
+                          </Button>
+                        </div>
+                      )}
                       {currentCandidate.entities.map((entity) => {
                         const config = (nodeTypeConfig as any)[entity.type]
                         const Icon = config?.icon || BookOpen
                         const color = config?.color || '#6b7280'
+                        const canDeselect = currentCandidate.entities.length > 3
+                        const isSelected = selectedEntityIds.includes(entity.id)
                         return (
-                          <Card key={entity.id} className="overflow-hidden">
+                          <Card
+                            key={entity.id}
+                            className={cn(
+                              'overflow-hidden transition-all',
+                              canDeselect && !isSelected && 'opacity-40'
+                            )}
+                          >
                             <CardContent className="p-3">
                               <div className="flex items-center gap-2">
+                                {canDeselect && (
+                                  <button
+                                    className="w-5 h-5 rounded border flex items-center justify-center flex-shrink-0 transition-colors"
+                                    style={{
+                                      borderColor: isSelected ? color : 'hsl(var(--border))',
+                                      backgroundColor: isSelected ? color : 'transparent',
+                                    }}
+                                    onClick={() => setSelectedEntityIds(prev =>
+                                      isSelected ? prev.filter(id => id !== entity.id) : [...prev, entity.id]
+                                    )}
+                                  >
+                                    {isSelected && <Check className="w-3 h-3 text-white" />}
+                                  </button>
+                                )}
                                 <div
                                   className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
                                   style={{ backgroundColor: `${color}20` }}
@@ -917,7 +1008,7 @@ export default function GraphPage() {
                       })}
                     </div>
 
-                    {/* LLM 判定原因 */}
+                    {/* 判定原因 */}
                     <Card className="bg-muted/50">
                       <CardContent className="p-3 space-y-1">
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -964,9 +1055,9 @@ export default function GraphPage() {
                       </Button>
                       <Button
                         className="flex-1 gap-1.5"
+                        disabled={selectedEntityIds.length < 2}
                         onClick={() => {
-                          const entityIds = currentCandidate.entities.map(e => e.id)
-                          handleMergePreview(entityIds, mergedLabel, mergedSummary)
+                          handleMergePreview(selectedEntityIds, mergedLabel, mergedSummary)
                         }}
                       >
                         <ArrowRight className="w-4 h-4" />
