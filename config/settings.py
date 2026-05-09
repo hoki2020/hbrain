@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     SUBGRAPH_MAX_DEPTH: int = 2
     RETRIEVAL_DOC_LENGTH_THRESHOLD: int = 16000  # 文档长度阈值，超过则进行证据压缩
 
+    # --- Chunked Extraction ---
+    CHUNK_SIZE: int = 20000             # 每个 chunk 的最大字符数
+    CHUNK_OVERLAP: int = 500            # chunk 之间的重叠字符数
+    CHUNK_THRESHOLD: int = 60000        # 超过此长度才启用分 chunk
+
     # --- Auth ---
     JWT_SECRET: str = "hbrain-secret-key-change-in-production"
     JWT_ALGORITHM: str = "HS256"

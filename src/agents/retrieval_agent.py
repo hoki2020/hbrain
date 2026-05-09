@@ -210,7 +210,7 @@ class RetrievalAgent:
                 f"[检索] Step6 证据压缩: {len(evidences_text)} → 目标 {threshold} chars..."
             )
             evidences_text = await self._compress_evidences(
-                question, evidences_text, max_chars=threshold
+                question, evidences, max_chars=threshold
             )
             logger.info(f"[检索] Step6 压缩完成: {len(evidences_text)} chars")
 
@@ -439,15 +439,11 @@ class RetrievalAgent:
         evidences: List[Evidence],
         keywords: List[str],
     ) -> List[Evidence]:
-        """Filter evidences by relevance to the question using LLM.
+        """Score evidences by relevance to the question using LLM.
 
-        Returns only evidences deemed relevant. Does not modify evidence content.
-        Falls back to returning all evidences on failure or empty result.
+        Assigns a score (0.0-1.0) to each evidence. Filters out low-scoring ones.
+        Falls back to returning all evidences with default score on failure.
         """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
         if not evidences:
             return evidences
 
@@ -476,49 +472,110 @@ class RetrievalAgent:
                 temperature=0.1,
             )
 
-            relevant_indices = result.get("relevant_indices", [])
-            if not isinstance(relevant_indices, list):
-                relevant_indices = []
+            scores_map = result.get("scores", {})
+            if not isinstance(scores_map, dict):
+                scores_map = {}
 
-            # Fallback: if LLM returns empty list, keep all evidences
-            if not relevant_indices:
-                logger.info("证据评估返回空列表，保留全部证据")
+            # Assign scores to evidences
+            for i, ev in enumerate(evidences):
+                raw_score = scores_map.get(str(i), scores_map.get(i, 0.5))
+                try:
+                    ev.score = max(0.0, min(1.0, float(raw_score)))
+                except (TypeError, ValueError):
+                    ev.score = 0.5
+
+            # Filter out very low scoring evidences (< 0.2)
+            filtered = [ev for ev in evidences if ev.score >= 0.2]
+
+            if not filtered:
+                logger.info("证据评估后无高分证据，保留全部")
                 return evidences
 
-            # Validate indices
-            valid_indices = set()
-            for idx in relevant_indices:
-                if isinstance(idx, int) and 0 <= idx < len(evidences):
-                    valid_indices.add(idx)
-
-            if not valid_indices:
-                logger.info("证据评估返回的索引均无效，保留全部证据")
-                return evidences
-
-            filtered = [evidences[i] for i in sorted(valid_indices)]
-            logger.info(f"证据评估: {len(evidences)} → {len(filtered)} 条相关证据")
+            filtered.sort(key=lambda e: e.score, reverse=True)
+            logger.info(
+                f"证据评估: {len(evidences)} → {len(filtered)} 条 (>=0.2), "
+                f"分数: {[f'{e.score:.1f}' for e in filtered[:5]]}"
+            )
             return filtered
 
         except Exception as e:
             logger.error(f"证据评估失败，保留全部证据: {e}")
+            for ev in evidences:
+                ev.score = 0.5
             return evidences
 
     async def _compress_evidences(
-        self, question: str, evidences_text: str, max_chars: int = None
+        self,
+        question: str,
+        evidences: List[Evidence],
+        max_chars: int = None,
     ) -> str:
+        """Compress evidences to fit within max_chars.
+
+        Strategy: iterate from highest to lowest score.
+        - If full evidence fits → keep it entirely.
+        - If full evidence overflows → use LLM to compress its content to fit remaining budget.
+        """
         if max_chars is None:
             max_chars = settings.RETRIEVAL_DOC_LENGTH_THRESHOLD
-        """Compress evidences using LLM when context exceeds model limits."""
-        if len(evidences_text) <= max_chars:
-            return evidences_text
-        return await self._llm.complete(
-            "你是一个信息压缩助手。将以下证据列表压缩到保留核心信息，去除重复和无关内容。"
-            "保持证据来源标注和关键事实。输出纯文本，不要加标题或格式。",
-            f"用户问题：{question}\n\n原始证据：\n{evidences_text}\n\n"
-            f"请压缩到 {max_chars} 字以内，保留最重要的证据和来源信息。",
-            temperature=0.2,
-            max_tokens=settings.RETRIEVAL_DOC_LENGTH_THRESHOLD,
+
+        if not evidences:
+            return ""
+
+        sorted_evs = sorted(evidences, key=lambda e: e.score, reverse=True)
+        lines: list[str] = []
+        used = 0
+        compressed_count = 0
+
+        for i, ev in enumerate(sorted_evs, 1):
+            level_tag = {
+                EvidenceLevel.FULL_TEXT: "全文证据",
+                EvidenceLevel.PARAGRAPH: "段落证据",
+                EvidenceLevel.SUMMARY: "总结证据",
+            }.get(ev.level, "证据")
+            score_str = f" [评分:{ev.score:.1f}]" if ev.score > 0 else ""
+            header = f"{i}. [{level_tag}]{score_str} (来源: {ev.doc_name}) "
+
+            remaining = max_chars - used
+            if remaining <= 0:
+                break
+
+            img_suffix = ""
+            if ev.images:
+                img_suffix = "\n   关联图片: " + ", ".join(ev.images[:5])
+
+            full_line = header + ev.content + img_suffix
+
+            if len(full_line) <= remaining:
+                lines.append(full_line)
+                used += len(full_line) + 1
+            else:
+                # Use LLM to compress this evidence's content
+                content_budget = remaining - len(header) - len(img_suffix)
+                if content_budget < 100:
+                    break
+                try:
+                    compressed = await self._llm.complete(
+                        "你是一个信息压缩助手。将以下文本压缩到指定字数以内，保留核心事实和关键信息。输出纯文本，不要加标题或格式。",
+                        f"原文：\n{ev.content}\n\n请压缩到 {content_budget} 字以内。",
+                        temperature=0.2,
+                        max_tokens=content_budget,
+                    )
+                    line = header + compressed + img_suffix
+                    if len(line) > remaining:
+                        line = line[:remaining]
+                    lines.append(line)
+                    used += len(line) + 1
+                    compressed_count += 1
+                except Exception as e:
+                    logger.warning(f"[压缩] LLM压缩证据失败: {e}")
+                    break
+
+        result = "\n".join(lines)
+        logger.info(
+            f"[压缩] 保留 {len(lines)} 条证据, LLM压缩 {compressed_count} 条, {len(result)} chars"
         )
+        return result
 
     def _serialize_context(self, entities: List[Entity]) -> str:
         """Serialize entities into context for answer generation."""
@@ -544,7 +601,7 @@ class RetrievalAgent:
         return "\n".join(lines)
 
     def _serialize_evidences(self, evidences: List[Evidence]) -> str:
-        """Serialize evidences with level tags and image URLs for answer generation."""
+        """Serialize evidences with level tags, scores, and image URLs."""
         lines = []
         for i, ev in enumerate(evidences, 1):
             level_tag = {
@@ -552,7 +609,8 @@ class RetrievalAgent:
                 EvidenceLevel.PARAGRAPH: "段落证据",
                 EvidenceLevel.SUMMARY: "总结证据",
             }.get(ev.level, "证据")
-            line = f"{i}. [{level_tag}] (来源: {ev.doc_name}) {ev.content}"
+            score_str = f" [评分:{ev.score:.1f}]" if ev.score > 0 else ""
+            line = f"{i}. [{level_tag}]{score_str} (来源: {ev.doc_name}) {ev.content}"
             if ev.images:
                 line += "\n   关联图片: " + ", ".join(ev.images[:5])
             lines.append(line)

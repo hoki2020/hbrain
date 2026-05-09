@@ -29,6 +29,7 @@ class Evidence(BaseModel):
     content: str
     entity_id: Optional[str] = None
     images: List[str] = Field(default_factory=list)
+    score: float = 0.0
 
 
 class ActivationResult(BaseModel):

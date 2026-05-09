@@ -85,10 +85,18 @@ async def _process_document(doc_id: int, original_name: str, file_content: bytes
             document_service.update_doc_status(doc_id, "extracting", pct)
 
         t3 = time.time()
-        result = await svc.ingest(
-            markdown, doc_id=doc_id, doc_name=original_name,
-            on_progress=on_extract_progress,
-        )
+        from config.settings import settings as _settings
+        if len(markdown) > _settings.CHUNK_THRESHOLD:
+            logger.info(f"[文档处理] #{doc_id} Step4 文档 {len(markdown)} chars > {_settings.CHUNK_THRESHOLD}，使用分chunk抽取")
+            result = await svc.ingest_chunked(
+                markdown, doc_id=doc_id, doc_name=original_name,
+                on_progress=on_extract_progress,
+            )
+        else:
+            result = await svc.ingest(
+                markdown, doc_id=doc_id, doc_name=original_name,
+                on_progress=on_extract_progress,
+            )
         entity_count = len(result.entities)
         relation_count = len(result.relations)
         retries = result.retries
@@ -184,10 +192,18 @@ async def _process_text_snippet(doc_id: int, title: str, text_content: str, conv
             document_service.update_doc_status(doc_id, "extracting", 30 + int(pct * 0.65))
 
         t3 = time.time()
-        result = await svc.ingest(
-            content, doc_id=doc_id, doc_name=title,
-            on_progress=on_extract_progress,
-        )
+        from config.settings import settings as _settings
+        if len(content) > _settings.CHUNK_THRESHOLD:
+            logger.info(f"[文本处理] #{doc_id} Step3 文本 {len(content)} chars > {_settings.CHUNK_THRESHOLD}，使用分chunk抽取")
+            result = await svc.ingest_chunked(
+                content, doc_id=doc_id, doc_name=title,
+                on_progress=on_extract_progress,
+            )
+        else:
+            result = await svc.ingest(
+                content, doc_id=doc_id, doc_name=title,
+                on_progress=on_extract_progress,
+            )
         entity_count = len(result.entities)
         relation_count = len(result.relations)
         logger.info(

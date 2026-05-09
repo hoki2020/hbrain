@@ -28,6 +28,9 @@ class EntitySource(BaseModel):
     doc_id: Optional[int] = None
     doc_name: Optional[str] = None
     excerpt: str
+    chunk_index: Optional[int] = None
+    heading_path: Optional[str] = None
+    offset: Optional[int] = None
     added_at: datetime = Field(default_factory=datetime.utcnow)
 
 
