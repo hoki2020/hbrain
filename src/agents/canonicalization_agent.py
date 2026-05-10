@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Company/institution suffixes to strip for matching
 _COMPANY_SUFFIXES = (
     "有限责任公司", "股份有限公司", "有限公司", "集团公司", "集团",
-    "股份公司", "有限公司", "公司", "企业", "工厂", "研究院",
+    "股份公司", "公司", "企业", "工厂", "研究院",
     "研究所", "大学", "学院", "医院", "中心", "协会", "基金会",
 )
 
@@ -28,7 +28,7 @@ def _normalize_label(s: str) -> str:
     return s
 
 
-def _is_match(a_norm: str, b_norm: str, a_raw: str, b_raw: str) -> bool:
+def _is_match(a_norm: str, b_norm: str) -> bool:
     """Check if two normalized labels indicate the same entity."""
     if not a_norm or not b_norm:
         return False
@@ -50,13 +50,7 @@ def _pick_canonical_label(entities: List[Entity]) -> str:
 
 
 def _pick_best_summary(entities: List[Entity]) -> str:
-    """Pick the most informative summary (longest non-JSON, or longest JSON for rule/image)."""
-    # For rule/image types, pick longest JSON summary
-    first_type = entities[0].entity_type.value
-    if first_type in ("rule", "image"):
-        return max(entities, key=lambda e: len(e.summary or "")).summary
-
-    # For other types, pick longest summary
+    """Pick the most informative summary (longest)."""
     return max(entities, key=lambda e: len(e.summary or "")).summary
 
 
@@ -172,7 +166,7 @@ class CanonicalizationAgent:
                 if b.id in used:
                     continue
                 b_norm = _normalize_label(b.label)
-                if _is_match(a_norm, b_norm, a.label, b.label):
+                if _is_match(a_norm, b_norm):
                     cluster.append(b)
                     used.add(b.id)
 

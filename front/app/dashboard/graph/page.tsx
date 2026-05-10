@@ -937,7 +937,7 @@ export default function GraphPage() {
                   <div className="p-4 space-y-4">
                     {/* 组内实体列表 */}
                     <div className="space-y-2">
-                      {currentCandidate.entities.length > 3 && (
+                      {currentCandidate.entities.length >= 3 && (
                         <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
                           <span>{t('graph.mergeSelected', { selected: selectedEntityIds.length, total: currentCandidate.entities.length })}</span>
                           <Button
@@ -958,7 +958,7 @@ export default function GraphPage() {
                         const config = (nodeTypeConfig as any)[entity.type]
                         const Icon = config?.icon || BookOpen
                         const color = config?.color || '#6b7280'
-                        const canDeselect = currentCandidate.entities.length > 3
+                        const canDeselect = currentCandidate.entities.length >= 3
                         const isSelected = selectedEntityIds.includes(entity.id)
                         return (
                           <Card

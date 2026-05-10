@@ -62,7 +62,7 @@ async def _process_document(doc_id: int, original_name: str, file_content: bytes
         try:
             from src.api.deps import get_llm
             llm = get_llm()
-            summary_prompt = f"用300字以内总结以下文档的核心内容：\n\n{markdown}"
+            summary_prompt = f"用300字以内总结以下文档的核心内容：\n\n{markdown[:12000]}"
             t2 = time.time()
             summary = await llm.complete(
                 "你是一个文档总结助手。用简洁的中文总结文档核心内容。",
@@ -170,7 +170,7 @@ async def _process_text_snippet(doc_id: int, title: str, text_content: str, conv
         try:
             from src.api.deps import get_llm
             llm = get_llm()
-            summary_prompt = f"用300字以内总结以下内容的核心要点：\n\n{content}"
+            summary_prompt = f"用300字以内总结以下内容的核心要点：\n\n{content[:12000]}"
             t2 = time.time()
             summary = await llm.complete(
                 "你是一个内容总结助手。用简洁的中文总结核心内容。",
@@ -226,8 +226,8 @@ async def submit_text_snippet(
     user: dict = Depends(get_current_user),
 ):
     """Submit a text snippet for knowledge extraction (no file upload needed)."""
-    content_bytes = req.content.encode("utf-8")
-    if len(content_bytes) > MAX_TEXT_SIZE:
+    # CJK chars are ~3 bytes in UTF-8, so chars * 3 is an upper bound
+    if len(req.content) * 3 > MAX_TEXT_SIZE:
         return {"error": f"文本大小超过限制（最大 {MAX_TEXT_SIZE // 1024 // 1024}MB）"}
 
     doc_info = document_service.save_text_content(req.title, req.content)

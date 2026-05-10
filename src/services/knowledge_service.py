@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
@@ -96,7 +97,6 @@ class KnowledgeService:
                 all_issues.append(f"评估失败: {e}")
                 if attempt < MAX_RETRIES:
                     logger.info("[知识入库] 评估失败，3秒后重试...")
-                    import asyncio
                     await asyncio.sleep(3)
                     continue
                 logger.error(f"[知识入库] 评估在所有重试后仍失败，跳过写入图谱")
@@ -214,8 +214,6 @@ class KnowledgeService:
         # Step 2: Extract + Evaluate per chunk
         chunk_results: list[tuple[list[Entity], list[Relation]]] = []
         all_issues: List[str] = []
-        total_accepted_entities = 0
-        total_accepted_relations = 0
 
         for i, chunk in enumerate(chunks):
             base_pct = 5 + int(50 * i / len(chunks))
@@ -266,8 +264,6 @@ class KnowledgeService:
                 )
                 all_issues.extend(filter_msgs)
                 chunk_results.append((accepted_entities, accepted_relations))
-                total_accepted_entities += len(accepted_entities)
-                total_accepted_relations += len(accepted_relations)
                 logger.info(
                     f"[分chunk抽取] chunk {i+1} 评估通过: "
                     f"{len(entities)}→{len(accepted_entities)} 实体, "

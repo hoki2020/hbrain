@@ -314,10 +314,15 @@ class EntitySearchStore:
         if not results:
             return []
 
+        # Batch fetch instead of N+1 queries
+        entity_ids = [r["canonical_entity_id"] for r in results]
+        entities_list = await graph_store.get_entities_by_ids(entity_ids)
+        entities_map = {e.id: e for e in entities_list}
+
         entities = []
         missing = 0
         for r in results:
-            entity = await graph_store.get_entity(r["canonical_entity_id"])
+            entity = entities_map.get(r["canonical_entity_id"])
             if entity:
                 entities.append(entity)
             else:

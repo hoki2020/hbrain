@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from typing import List, Optional
 
 import kuzu
@@ -21,6 +22,9 @@ class KuzuStore(GraphStore):
         self._db = kuzu.Database(db_path)
         self._ensure_schema()
         self._migrate_relation_types()
+        self._adj_cache: dict | None = None
+        self._adj_cache_time: float = 0
+        self._write_lock = asyncio.Lock()
 
     def _get_conn(self) -> kuzu.Connection:
         """Create a fresh connection per call — Kuzu Connection is not thread-safe."""
@@ -31,8 +35,8 @@ class KuzuStore(GraphStore):
             self._db.close()
             self._db = None
 
-    def _run_sync(self, func):
-        return asyncio.get_event_loop().run_in_executor(None, func)
+    async def _run_sync(self, func):
+        return await asyncio.to_thread(func)
 
     # ── Schema ─────────────────────────────────────────────
 
@@ -141,7 +145,10 @@ class KuzuStore(GraphStore):
                 )
             return entity.id
 
-        return await self._run_sync(_exec)
+        async with self._write_lock:
+            result = await self._run_sync(_exec)
+        self.invalidate_adj_cache()
+        return result
 
     async def get_entity(self, entity_id: str) -> Optional[Entity]:
         def _exec():
@@ -187,7 +194,9 @@ class KuzuStore(GraphStore):
                 },
             )
 
-        await self._run_sync(_exec)
+        async with self._write_lock:
+            await self._run_sync(_exec)
+        self.invalidate_adj_cache()
 
     async def delete_entity(self, entity_id: str) -> None:
         def _exec():
@@ -203,7 +212,9 @@ class KuzuStore(GraphStore):
                 {"id": entity_id},
             )
 
-        await self._run_sync(_exec)
+        async with self._write_lock:
+            await self._run_sync(_exec)
+        self.invalidate_adj_cache()
 
     async def delete_all(self) -> None:
         def _exec():
@@ -214,7 +225,9 @@ class KuzuStore(GraphStore):
                 )
             conn.execute("MATCH (e:Entity) DELETE e")
 
-        await self._run_sync(_exec)
+        async with self._write_lock:
+            await self._run_sync(_exec)
+        self.invalidate_adj_cache()
 
     async def delete_by_doc(self, doc_id: int) -> tuple[int, List[str], List[str]]:
         """Remove entities/relations extracted from *doc_id*.
@@ -271,7 +284,10 @@ class KuzuStore(GraphStore):
             updated_ids = [eid for eid, _ in to_update]
             return len(to_delete), to_delete, updated_ids
 
-        return await self._run_sync(_exec)
+        async with self._write_lock:
+            result = await self._run_sync(_exec)
+        self.invalidate_adj_cache()
+        return result
 
     # ── Relation CRUD ──────────────────────────────────────
 
@@ -294,7 +310,9 @@ class KuzuStore(GraphStore):
                 },
             )
 
-        await self._run_sync(_exec)
+        async with self._write_lock:
+            await self._run_sync(_exec)
+        self.invalidate_adj_cache()
 
     # ── Graph Traversal ────────────────────────────────────
 
@@ -476,6 +494,41 @@ class KuzuStore(GraphStore):
             return relations
 
         return await self._run_sync(_exec)
+
+    async def get_adjacency(self, ttl: int = 300) -> dict[str, list[tuple[str, str, float, float]]]:
+        """Return cached adjacency list: entity_id → [(neighbor_id, rel_type, weight, confidence)].
+
+        Cache is refreshed every `ttl` seconds. Call invalidate_adj_cache() after writes.
+        """
+        if self._adj_cache is not None and time.time() - self._adj_cache_time < ttl:
+            return self._adj_cache
+
+        def _exec():
+            from collections import defaultdict
+            adj: dict[str, list[tuple[str, str, float, float]]] = defaultdict(list)
+            for rel_type in _RELATION_TYPE_VALUES:
+                result = self._get_conn().execute(
+                    f"MATCH (a:Entity)-[r:REL_{rel_type}]->(b:Entity) "
+                    f"RETURN a.id, b.id, r.weight, r.confidence"
+                )
+                while result.has_next():
+                    row = result.get_next()
+                    src, tgt = row[0], row[1]
+                    w = row[2] if row[2] is not None else 1.0
+                    c = row[3] if row[3] is not None else 0.5
+                    adj[src].append((tgt, rel_type, w, c))
+                    adj[tgt].append((src, rel_type, w, c))
+            return dict(adj)
+
+        adj = await self._run_sync(_exec)
+        self._adj_cache = adj
+        self._adj_cache_time = time.time()
+        return adj
+
+    def invalidate_adj_cache(self):
+        """Invalidate the adjacency cache. Call after write operations."""
+        self._adj_cache = None
+        self._adj_cache_time = 0
 
     # ── Stats ──────────────────────────────────────────────
 
@@ -671,7 +724,10 @@ class KuzuStore(GraphStore):
 
             return {"relations_migrated": migrated, "relations_deleted": deleted}
 
-        return await self._run_sync(_exec)
+        async with self._write_lock:
+            result = await self._run_sync(_exec)
+        self.invalidate_adj_cache()
+        return result
 
     # ── Internal Helpers ───────────────────────────────────
 

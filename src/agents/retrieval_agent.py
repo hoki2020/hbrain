@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import re
 from typing import List, Optional
 
 from config.settings import settings
@@ -34,14 +37,26 @@ class RetrievalAgent:
     ) -> ActivationResult:
         logger.info(f"[检索] ── 开始检索: '{question}'")
 
-        # Step 1: Analyze query → problem archetype + keywords
-        analysis = await self._llm.complete_json(
+        # Step 1+2 parallel: LLM analysis + initial search with full question
+        analysis_task = self._llm.complete_json(
             RETRIEVAL_SYSTEM,
             RETRIEVAL_USER.format(question=question),
         )
+        initial_search_task = self._entity_search.search_entities(
+            question, self._graph, limit=5,
+        )
+
+        analysis, initial_results = await asyncio.gather(
+            analysis_task, initial_search_task, return_exceptions=True,
+        )
+
+        # Parse analysis
+        if isinstance(analysis, Exception):
+            logger.error(f"[检索] Step1 LLM分析失败: {analysis}")
+            analysis = {"problem_archetype": "", "keywords": []}
+
         problem_archetype = str(analysis.get("problem_archetype", ""))
         raw_keywords = analysis.get("keywords", [])
-        # Flatten nested lists (LLM may return [["kw1", "kw2"]] instead of ["kw1", "kw2"])
         keywords = []
         if isinstance(raw_keywords, list):
             for item in raw_keywords:
@@ -58,29 +73,37 @@ class RetrievalAgent:
             f"[检索] Step1 分析完成: 类型='{problem_archetype}', 关键词={keywords}"
         )
 
-        # Step 2: Graph match — search all terms in parallel
-        import asyncio
-
-        search_terms = [problem_archetype] + keywords
-        search_tasks = [
-            self._entity_search.search_entities(term, self._graph, limit=5)
-            for term in search_terms
-        ]
-        results = await asyncio.gather(*search_tasks, return_exceptions=True)
-
+        # Collect matched entities: initial search + keyword searches
         matched_entities: List[Entity] = []
         seen_ids = set()
-        for term, result in zip(search_terms, results):
-            if isinstance(result, Exception):
-                logger.warning(f"[检索] Step2 搜索 '{term}' 失败: {result}")
-                continue
-            logger.info(
-                f"[检索] Step2 搜索 '{term}' → 命中 {len(result)} 个: {[e.label for e in result]}"
-            )
-            for e in result:
+
+        # Process initial search results
+        if isinstance(initial_results, Exception):
+            logger.warning(f"[检索] Step2 初始搜索失败: {initial_results}")
+        else:
+            for e in initial_results:
                 if e.id not in seen_ids:
                     seen_ids.add(e.id)
                     matched_entities.append(e)
+
+        # Step 2b: search LLM-extracted keywords (parallel)
+        if keywords:
+            search_tasks = [
+                self._entity_search.search_entities(term, self._graph, limit=5)
+                for term in keywords
+            ]
+            results = await asyncio.gather(*search_tasks, return_exceptions=True)
+            for term, result in zip(keywords, results):
+                if isinstance(result, Exception):
+                    logger.warning(f"[检索] Step2 搜索 '{term}' 失败: {result}")
+                    continue
+                logger.info(
+                    f"[检索] Step2 搜索 '{term}' → 命中 {len(result)} 个: {[e.label for e in result]}"
+                )
+                for e in result:
+                    if e.id not in seen_ids:
+                        seen_ids.add(e.id)
+                        matched_entities.append(e)
 
         logger.info(f"[检索] Step2 完成: 共匹配 {len(matched_entities)} 个去重实体")
 
@@ -95,9 +118,7 @@ class RetrievalAgent:
                 answer="未找到与问题相关的知识实体，请尝试换个问法或先导入相关文档。",
             )
 
-        # Step 3: Weighted BFS graph expansion
-        from collections import defaultdict
-
+        # Step 3: Weighted BFS graph expansion (using cached adjacency)
         from src.models.relation import (
             DEFAULT_EDGE_WEIGHT,
             EDGE_WEIGHTS,
@@ -105,17 +126,23 @@ class RetrievalAgent:
         )
 
         HOP_DECAY = 0.7
-        MAX_DEPTH = 3
+        MAX_DEPTH = max_depth + 1  # BFS depth: matched entities are depth 0
         MAX_ENTITIES = 20
 
-        all_relations = await self._graph.get_all_relations(limit=5000)
+        raw_adj = await self._graph.get_adjacency()
 
-        # Build adjacency: entity_id → [(neighbor_id, rel_type, weight)]
-        adj: dict[str, list[tuple[str, RelationType, float]]] = defaultdict(list)
-        for r in all_relations:
-            w = EDGE_WEIGHTS.get(r.relation_type, DEFAULT_EDGE_WEIGHT)
-            adj[r.source_id].append((r.target_id, r.relation_type, w))
-            adj[r.target_id].append((r.source_id, r.relation_type, w))
+        # Build adjacency with RelationType keys for BFS
+        adj: dict[str, list[tuple[str, RelationType, float]]] = {}
+        for eid, neighbors in raw_adj.items():
+            typed_neighbors = []
+            for neighbor_id, rel_type_str, w, _c in neighbors:
+                try:
+                    rt = RelationType(rel_type_str)
+                except ValueError:
+                    continue
+                ew = EDGE_WEIGHTS.get(rt, DEFAULT_EDGE_WEIGHT)
+                typed_neighbors.append((neighbor_id, rt, ew))
+            adj[eid] = typed_neighbors
 
         # BFS with scores
         entity_scores: dict[str, float] = {}
@@ -170,9 +197,9 @@ class RetrievalAgent:
         )[:MAX_ENTITIES]
         subgraph_entities = await self._graph.get_entities_by_ids(sorted_ids)
 
-        expansion_count = len(subgraph_entities) - len(matched_entities)
+        total_rels = sum(len(v) for v in raw_adj.values()) // 2
         logger.info(
-            f"[检索] Step3 加权BFS: {len(matched_entities)} 匹配 → {len(all_relations)} 关系 → "
+            f"[检索] Step3 加权BFS: {len(matched_entities)} 匹配 → {total_rels} 关系 → "
             f"{len(subgraph_entities)} 实体 (TOP {MAX_ENTITIES}), {len(hit_edges)} 命中边"
         )
         # Log top scored entities
@@ -181,21 +208,54 @@ class RetrievalAgent:
                 f"[检索]   → {eid[:8]}... score={entity_scores[eid]:.4f} depth={entity_depths.get(eid, '?')}"
             )
 
-        # Step 4: Evidence gathering (full_text > paragraph > summary)
-        evidences = await self._gather_evidences(subgraph_entities, keywords)
-        level_counts = {}
-        for ev in evidences:
-            level_counts[ev.level.value] = level_counts.get(ev.level.value, 0) + 1
-        level_str = ", ".join(f"{k}×{v}" for k, v in level_counts.items())
-        logger.info(f"[检索] Step4 证据收集: {len(evidences)} 条 ({level_str})")
+        # Step 4a: Summary-only evidences (no document I/O)
+        evidence_count_before = 0
+        summary_evidences = []
+        for entity in subgraph_entities:
+            if entity.summary:
+                summary_evidences.append(Evidence(
+                    doc_id=0,
+                    doc_name=f"实体: {entity.label}",
+                    level=EvidenceLevel.SUMMARY,
+                    content=entity.summary,
+                    entity_id=entity.id,
+                ))
+        logger.info(f"[检索] Step4a 总结证据: {len(summary_evidences)} 条")
 
-        # Step 5: Filter evidences by relevance (LLM evaluation)
-        evidence_count_before = len(evidences)
-        if evidences:
-            evidences = await self._filter_evidences(question, evidences, keywords)
-        logger.info(
-            f"[检索] Step5 证据评估: {evidence_count_before} → {len(evidences)} 条"
-        )
+        # Step 5a: Check if summary evidence is sufficient
+        summary_sufficient = False
+        evidences: List[Evidence] = []
+        if summary_evidences:
+            evaluated_summaries = await self._filter_evidences(question, summary_evidences, keywords)
+            high_scored = [ev for ev in evaluated_summaries if ev.score >= 0.7]
+            total_chars = sum(len(ev.content) for ev in high_scored)
+            if high_scored and total_chars >= 500:
+                summary_sufficient = True
+                evidences = evaluated_summaries
+                evidence_count_before = len(evaluated_summaries)
+                logger.info(
+                    f"[检索] Step5a 总结充分 (高分{len(high_scored)}条, {total_chars}chars)，跳过全文证据"
+                )
+            else:
+                logger.info(
+                    f"[检索] Step5a 总结不足 (高分{len(high_scored)}条, {total_chars}chars)，加载全文证据"
+                )
+
+        # Step 4b+5b: Full evidence path (only if summary insufficient)
+        if not summary_sufficient:
+            evidences = await self._gather_evidences(subgraph_entities, keywords)
+            level_counts = {}
+            for ev in evidences:
+                level_counts[ev.level.value] = level_counts.get(ev.level.value, 0) + 1
+            level_str = ", ".join(f"{k}×{v}" for k, v in level_counts.items())
+            logger.info(f"[检索] Step4b 全文证据收集: {len(evidences)} 条 ({level_str})")
+
+            evidence_count_before = len(evidences)
+            if evidences:
+                evidences = await self._filter_evidences(question, evidences, keywords)
+            logger.info(
+                f"[检索] Step5b 证据评估: {evidence_count_before} → {len(evidences)} 条"
+            )
 
         # Step 6: Compress evidences if too large
         graph_context = self._serialize_context(subgraph_entities)
@@ -284,8 +344,6 @@ class RetrievalAgent:
         Priority is per-document: if doc X already has full_text/paragraph evidence
         from any entity, skip summary evidence from other entities referencing doc X.
         """
-        import re
-
         from src.services.document_service import get_document, search_paragraphs
 
         evidences: List[Evidence] = []
@@ -409,8 +467,6 @@ class RetrievalAgent:
         # ── 图片证据 ──
         for img_entity in image_entities:
             try:
-                import json
-
                 summary_data = json.loads(img_entity.summary)
                 caption = summary_data.get("caption", "")
                 image_url = summary_data.get("image_url", "")
@@ -512,9 +568,9 @@ class RetrievalAgent:
     ) -> str:
         """Compress evidences to fit within max_chars.
 
-        Strategy: iterate from highest to lowest score.
-        - If full evidence fits → keep it entirely.
-        - If full evidence overflows → use LLM to compress its content to fit remaining budget.
+        Strategy:
+        1. Sort by score descending, keep high-scoring evidences that fit entirely.
+        2. For overflowing evidences, compress them in parallel with LLM.
         """
         if max_chars is None:
             max_chars = settings.RETRIEVAL_DOC_LENGTH_THRESHOLD
@@ -523,10 +579,9 @@ class RetrievalAgent:
             return ""
 
         sorted_evs = sorted(evidences, key=lambda e: e.score, reverse=True)
-        lines: list[str] = []
-        used = 0
-        compressed_count = 0
 
+        # Pre-calculate headers and image suffixes
+        ev_metas = []
         for i, ev in enumerate(sorted_evs, 1):
             level_tag = {
                 EvidenceLevel.FULL_TEXT: "全文证据",
@@ -535,45 +590,73 @@ class RetrievalAgent:
             }.get(ev.level, "证据")
             score_str = f" [评分:{ev.score:.1f}]" if ev.score > 0 else ""
             header = f"{i}. [{level_tag}]{score_str} (来源: {ev.doc_name}) "
-
-            remaining = max_chars - used
-            if remaining <= 0:
-                break
-
             img_suffix = ""
             if ev.images:
                 img_suffix = "\n   关联图片: " + ", ".join(ev.images[:5])
-
             full_line = header + ev.content + img_suffix
+            ev_metas.append((ev, header, img_suffix, full_line))
 
+        # Pass 1: keep evidences that fit entirely
+        kept_lines: list[tuple[int, str]] = []  # (original_index, line)
+        used = 0
+        overflow_indices: list[int] = []  # indices needing compression
+
+        for idx, (ev, header, img_suffix, full_line) in enumerate(ev_metas):
+            remaining = max_chars - used
+            if remaining <= 0:
+                break
             if len(full_line) <= remaining:
-                lines.append(full_line)
+                kept_lines.append((idx, full_line))
                 used += len(full_line) + 1
             else:
-                # Use LLM to compress this evidence's content
-                content_budget = remaining - len(header) - len(img_suffix)
-                if content_budget < 100:
-                    break
-                try:
-                    compressed = await self._llm.complete(
-                        "你是一个信息压缩助手。将以下文本压缩到指定字数以内，保留核心事实和关键信息。输出纯文本，不要加标题或格式。",
-                        f"原文：\n{ev.content}\n\n请压缩到 {content_budget} 字以内。",
-                        temperature=0.2,
-                        max_tokens=content_budget,
-                    )
-                    line = header + compressed + img_suffix
-                    if len(line) > remaining:
-                        line = line[:remaining]
-                    lines.append(line)
-                    used += len(line) + 1
-                    compressed_count += 1
-                except Exception as e:
-                    logger.warning(f"[压缩] LLM压缩证据失败: {e}")
-                    break
+                overflow_indices.append(idx)
 
-        result = "\n".join(lines)
+        # Pass 2: parallel LLM compression for overflowing evidences
+        compressed_map: dict[int, str] = {}
+        if overflow_indices:
+            # Calculate remaining budget after kept evidences
+            remaining_budget = max_chars - used
+            # Distribute budget evenly among overflowing evidences
+            budget_per_ev = max(200, remaining_budget // len(overflow_indices))
+
+            async def _compress_one(idx: int) -> tuple[int, str]:
+                ev, header, img_suffix, _ = ev_metas[idx]
+                content_budget = budget_per_ev - len(header) - len(img_suffix)
+                if content_budget < 100:
+                    return idx, ""
+                compressed = await self._llm.complete(
+                    "你是一个信息压缩助手。将以下文本压缩到指定字数以内，保留核心事实和关键信息。输出纯文本，不要加标题或格式。",
+                    f"原文：\n{ev.content}\n\n请压缩到 {content_budget} 字以内。",
+                    temperature=0.2,
+                    max_tokens=content_budget,
+                )
+                line = header + compressed + img_suffix
+                if len(line) > budget_per_ev:
+                    line = line[:budget_per_ev]
+                return idx, line
+
+            tasks = [_compress_one(idx) for idx in overflow_indices]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning(f"[压缩] LLM压缩证据失败: {result}")
+                    continue
+                idx, line = result
+                if line:
+                    compressed_map[idx] = line
+
+        # Assemble final output in score order
+        final_lines: list[str] = []
+        for idx, line in kept_lines:
+            final_lines.append(line)
+        for idx in overflow_indices:
+            if idx in compressed_map:
+                final_lines.append(compressed_map[idx])
+
+        result = "\n".join(final_lines)
         logger.info(
-            f"[压缩] 保留 {len(lines)} 条证据, LLM压缩 {compressed_count} 条, {len(result)} chars"
+            f"[压缩] 保留 {len(final_lines)} 条证据, "
+            f"LLM压缩 {len(compressed_map)} 条, {len(result)} chars"
         )
         return result
 
